@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Capy-Us: P2P Chat & Play</title>
+    
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, set, onValue, onDisconnect, remove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        // SENİN FİREBASE BİLGİLERİN
+        const firebaseConfig = {
+            apiKey: "AIzaSyB_KK8AXoG3sKy0wzO73ObZOeGodHgTmog",
+            authDomain: "capy-us.firebaseapp.com",
+            databaseURL: "https://capy-us-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "capy-us",
+            storageBucket: "capy-us.firebasestorage.app",
+            messagingSenderId: "450654514170",
+            appId: "1:450654514170:web:f33cf7a05662868fee1243"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const roomsRef = ref(db, 'rooms');
+
+        let peer, myId, myNick, myColor;
+        let players = {};
+        let connections = [];
+
+        // --- SUNUCU OLUŞTURMA ---
+        window.createRoom = function() {
+            myNick = document.getElementById('nickInput').value || "Capy";
+            myColor = document.getElementById('colorSelect').value;
+            
+            peer = new Peer();
+            peer.on('open', (id) => {
+                myId = id;
+                const roomRef = ref(db, 'rooms/' + id);
+                set(roomRef, { hostName: myNick, id: id });
+                onDisconnect(roomRef).remove();
+
+                showScreen('gameScreen');
+                initGame();
+                addChatMessage({ nick: "SİSTEM", color: "#27ae60", text: "Gemi hazır! Arkadaşlarını bekle." });
+            });
+
+            peer.on('connection', (conn) => {
+                connections.push(conn);
+                conn.on('data', (data) => handleData(data, conn));
+            });
+        };
+
+        // --- LOBİ LİSTESİ ---
+        window.refreshLobbyList = function() {
+            showScreen('lobbyListScreen');
+            const listDiv = document.getElementById('serverList');
+            onValue(roomsRef, (snap) => {
+                listDiv.innerHTML = "";
+                const rooms = snap.val();
+                if(!rooms) { listDiv.innerHTML = "Aktif sunucu bulunamadı."; return; }
+                
+                Object.values(rooms).forEach(room => {
+                    const item = document.createElement('div');
+                    item.className = 'server-item';
+                    item.innerHTML = `<span><b>${room.hostName}</b></span> 
+                                     <button class="btn-green" onclick="joinRoom('${room.id}')" style="width:80px; margin:0;">KATIL</button>`;
+                    listDiv.appendChild(item);
+                });
+            });
+        };
+
+        // --- KATILMA ---
+        window.joinRoom = function(targetId) {
+            myNick = document.getElementById('nickInput').value || "Oyuncu";
+            myColor = document.getElementById('colorSelect').value;
+            peer = new Peer();
+            peer.on('open', (id) => {
+                myId = id;
+                const conn = peer.connect(targetId);
+                connections.push(conn);
+                conn.on('open', () => {
+                    showScreen('gameScreen');
+                    conn.send({ type: 'join', id: myId, nick: myNick, color: myColor });
+                    initGame();
+                });
+                conn.on('data', handleData);
+            });
+        };
+
+        // --- VERİ İŞLEME VE CHAT ---
+        function handleData(data, conn) {
+            if(data.type === 'chat') {
+                addChatMessage(data);
+            } else if(data.type === 'join') {
+                players[data.id] = { nick: data.nick, color: data.color, x: 150, y: 150 };
+                addChatMessage({ nick: "SİSTEM", color: "#2ecc71", text: data.nick + " odaya daldı!" });
+                // Host isen yeni gelen kişiye kendi bilgilerini gönder
+                connections.forEach(c => c.send({ type: 'join', id: myId, nick: myNick, color: myColor }));
+            }
+        }
+
+        window.sendChat = function() {
+            const input = document.getElementById('chatInput');
+            if(!input.value) return;
+            const msg = { type: 'chat', nick: myNick, color: myColor, text: input.value };
+            addChatMessage(msg);
+            connections.forEach(c => { if(c.open) c.send(msg); });
+            input.value = "";
+        };
+
+        function addChatMessage(data) {
+            const chatBox = document.getElementById('chatBox');
+            chatBox.innerHTML += `<div><span style="color:${data.color}"><b>${data.nick}:</b></span> ${data.text}</div>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function initGame() {
+            players[myId] = { nick: myNick, color: myColor, x: 280, y: 180 };
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            function draw() {
+                ctx.clearRect(0,0,600,400);
+                Object.values(players).forEach(p => {
+                    ctx.fillStyle = p.color;
+                    ctx.fillRect(p.x, p.y, 30, 40);
+                    ctx.fillStyle = "white";
+                    ctx.textAlign = "center";
+                    ctx.fillText(p.nick, p.x + 15, p.y - 5);
+                });
+                requestAnimationFrame(draw);
+            }
+            draw();
+        }
+    </script>
+
+    <style>
+        body { margin: 0; background: #0f0f0f; color: white; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        .screen { display: none; flex-direction: column; align-items: center; background: #1e1e1e; padding: 40px; border-radius: 30px; border: 2px solid #333; }
+        .active { display: flex; }
+        .btn { padding: 15px; margin: 10px; border-radius: 15px; border: none; cursor: pointer; font-weight: bold; width: 220px; transition: 0.3s; }
+        .btn-green { background: #27ae60; color: white; }
+        .btn-blue { background: #2980b9; color: white; }
+        .btn-red { background: #e74c3c; color: white; }
+        .btn:hover { opacity: 0.8; transform: scale(1.05); }
+        .server-item { background: #2a2a2a; padding: 15px; margin: 8px; width: 320px; display: flex; justify-content: space-between; align-items: center; border-radius: 12px; border: 1px solid #444; }
+        #chatBox { height: 120px; width: 590px; overflow-y: auto; background: rgba(0,0,0,0.5); margin-top: 10px; padding: 5px; font-size: 14px; text-align: left; border-radius: 10px; border: 1px solid #333; }
+        canvas { background: #000; border: 3px solid #333; border-radius: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        input, select { padding: 12px; border-radius: 10px; border: 1px solid #444; margin: 8px; width: 200px; background: #222; color: white; }
+    </style>
+</head>
+<body>
+
+    <div id="menuScreen" class="screen active">
+        <h1 style="color:#27ae60; font-size: 3em; margin-bottom: 10px;">CAPY-US</h1>
+        <p style="color:#888; margin-bottom: 20px;">P2P Uzay Macerası</p>
+        <input type="text" id="nickInput" placeholder="Karakter Adı">
+        <select id="colorSelect">
+            <option value="#ff4757">Kırmızı</option>
+            <option value="#1e90ff">Mavi</option>
+            <option value="#2ed573">Yeşil</option>
+            <option value="#eccc68">Sarı</option>
+            <option value="#a4b0be">Gri</option>
+        </select>
+        <button class="btn btn-green" onclick="createRoom()">SUNUCU OLUŞTUR</button>
+        <button class="btn btn-blue" onclick="refreshLobbyList()">SUNUCULARA KATIL</button>
+    </div>
+
+    <div id="lobbyListScreen" class="screen">
+        <h2>Aktif Gemiler</h2>
+        <div id="serverList">Sunucular taranıyor...</div>
+        <button class="btn btn-red" onclick="location.reload()">GERİ DÖN</button>
+    </div>
+
+    <div id="gameScreen" class="screen">
+        <canvas id="gameCanvas" width="600" height="400"></canvas>
+        <div id="chatBox"></div>
+        <div style="display:flex; width: 600px; gap: 10px; margin-top: 10px;">
+            <input type="text" id="chatInput" style="flex-grow: 1; width: auto;" placeholder="Mesajını buraya yaz...">
+            <button class="btn-blue" onclick="sendChat()" style="width: 100px; border-radius: 10px; border:none; cursor:pointer;">GÖNDER</button>
+        </div>
+        <button class="btn btn-red" onclick="location.reload()" style="margin-top:20px; width: 600px;">DERS YERİNDEN ÇIK</button>
+    </div>
+
+    <script>
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
+        // Enter ile mesaj gönderme
+        document.addEventListener('keypress', (e) => {
+            if(e.key === 'Enter' && document.activeElement.id === 'chatInput') sendChat();
+        });
+    </script>
+</body>
+</html>
